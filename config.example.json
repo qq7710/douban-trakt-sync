@@ -16,7 +16,8 @@
     "cross_type_fallback": false,
     "state_file": "synced.json",
     "max_attempts": 3,
-    "retry_after_hours": 48
+    "retry_after_hours": 48,
+    "network_retries": 1
   },
   "watch": {
     "interval": 30,

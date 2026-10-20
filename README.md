@@ -136,6 +136,42 @@ python3 auth_trakt.py --config config.json --mode paste
 
 ---
 
+## 📦 单文件版 `sync.py`（新装推荐）
+
+从这一版起，授权 / 全量同步 / 探测 / 常驻守护**全部合并进了一个文件 `sync.py`**。
+新装只要两个文件：
+
+```
+sync.py
+config.json        ← 复制 config.example.json 后填写
+```
+
+（`token.json` / `synced.json` / `watch_state.json` / `sync.log` 由脚本自己生成，不用管。）
+
+```bash
+python sync.py auth              # 首次授权 Trakt（只需一次）
+python sync.py once              # 探测一次：有新增才同步（给定时任务每分钟调用）
+python sync.py run               # 手动全量跑一次
+python sync.py watch --daemon    # 后台常驻，30 秒一轮
+python sync.py status            # 看守护进程在不在
+python sync.py stop              # 停掉守护进程
+python sync.py selftest          # 离线自检
+```
+
+几个省事的设计：
+
+- **自动切到脚本所在目录**：从任何目录调用，`config.json` / `token.json` / 日志都找得到
+- **自动找虚拟环境**：系统 python 没装 requests 时自动改用项目里的 `.venv` 重跑，
+  不用先 `source venv/bin/activate`
+- **自带互斥锁**：`once` 被每分钟调用时，上一轮没跑完就跳过，不会堆积
+  （用 Python 实现，不再依赖 shell 的 `trap` —— 之前踩过 `exec` 让 `trap` 永不执行的坑）
+- 不需要 `chmod +x`
+
+> 老版本的多文件（`wishlist_sync.py` / `watch_sync.py` / `auth_trakt.py` / 各种 `.sh`）
+> **继续保留、功能完全一致**，已经在跑的不用动。新装建议直接用 `sync.py`。
+
+---
+
 ## 部署方式
 
 > 先说清楚：这个项目**不是**"定时全量跑一遍"。它跑的是**探测模式** ——
@@ -155,8 +191,16 @@ python3 auth_trakt.py --config config.json --mode paste
 | Cron | `* * * * *`（每分钟一次，5 个字段） |
 | 脚本内容 | `bash /你的目录/watch_sync.sh once` |
 
+用单文件版的话，「脚本内容」填这个（把 `/你的目录` 换成实际路径）：
+
+```
+/你的目录/.venv/bin/python /你的目录/sync.py once
+```
+
+（没建虚拟环境、requests 装在系统 python 里的话就写 `python3 /你的目录/sync.py once`）
+
 `once` = 「探测一次，有新增才同步」。静默期每轮只有 1 次请求，
-新增想看后 **1 分钟内**同步。脚本自带互斥锁，上一轮没跑完不会堆积。
+新增想看后 **1 分钟内**同步。自带互斥锁，上一轮没跑完不会堆积。
 
 > ⚠️ 常见坑：Cron 填成 `*/10 0 * * *` 表示"只在凌晨 0 点这一小时里每 10 分钟"，
 > 结果一天只跑几次。要每分钟就是 `* * * * *`。
@@ -179,6 +223,14 @@ chmod +x watch_sync.sh
 ./watch_sync.sh status     # 看是否在跑
 ./watch_sync.sh log        # 实时看日志（Ctrl+C 退出，不会杀进程）
 ./watch_sync.sh stop       # 停止
+```
+
+用单文件版的话连 shell 脚本都不需要（它自己会后台化、自己写 pid 和 watch.log）：
+
+```bash
+python sync.py watch --daemon   # 后台常驻
+python sync.py status           # 是否在跑
+python sync.py stop             # 停掉
 ```
 
 它做的事：
@@ -313,11 +365,11 @@ VIP 才不限。官方应用和网页版不占名额。注意事项：
 
 - 别在 Trakt **Settings → Apps → Connected Apps** 里随手 revoke，重连会被当作新授权并受限额约束
 - token 每 7 天自动续期，只要 NAS 别长期关机就永远不需要重新授权
-- 真失效了：先撤销旧的腾出格子，再跑 `auth_trakt.py`
+- 真失效了：先撤销旧的腾出格子，再跑 `python sync.py auth`（老版是 `auth_trakt.py`）
 - 自己的多个脚本**共用同一个 client_id** 只算一个连接
 
 **没有「新增想看」的日志，是不是坏了？**
-不是。静默期每次只打一行 `单次模式：探测一次`，没有 `🆕` 就说明豆瓣侧确实没新增。
+不是。静默期每次只打一行 `探测一次，豆瓣用户 xxx`，没有 `🆕` 就说明豆瓣侧确实没新增。
 想验证就去豆瓣随手加一条想看，一分钟内应该出现 `🆕 发现新增想看`。
 
 ---
@@ -326,12 +378,13 @@ VIP 才不限。官方应用和网页版不占名额。注意事项：
 
 | 文件 | 作用 |
 |---|---|
-| `wishlist_sync.py` | 主脚本 |
-| `auth_trakt.py` | Trakt 一次性授权（生成 token.json） |
+| **`sync.py`** | **单文件版，新装推荐**：授权 / 全量 / 探测 / 常驻全在这一个文件里 |
+| `wishlist_sync.py` | 老版主脚本（`sync.py` 已包含它，保留兼容） |
+| `auth_trakt.py` | 老版 Trakt 授权脚本（`sync.py auth` 等价，保留兼容） |
+| `watch_sync.py` | 老版守护进程（`sync.py watch` 等价，保留兼容） |
+| `watch_sync.sh` | 老版守护进程启停脚本（start/stop/status/log/once/ensure） |
 | `nas_setup.sh` | 一键部署（装依赖 + 写每分钟探测的定时任务 + 试跑） |
-| `run_sync.sh` | 手动跑一次全量同步的包装脚本（日常用不上，排障时用） |
-| `watch_sync.py` | 准实时守护进程（轻量轮询 + 事件触发） |
-| `watch_sync.sh` | 守护进程启停脚本（start/stop/restart/status/log/once/ensure） |
+| `run_sync.sh` | 手动跑一次全量的包装脚本（日常用不上，排障时用） |
 | `douban-trakt-watch.service` | systemd unit（可选） |
 | `config.example.json` | 配置模板 |
 | `requirements.txt` | 依赖：requests + certifi |

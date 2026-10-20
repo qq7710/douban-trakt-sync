@@ -25,6 +25,7 @@ else
 fi
 
 PIDFILE="$DIR/watch.pid"
+LOCK="$DIR/.once.lock"
 LOG="$DIR/watch.log"
 NAME="douban-trakt-watch"
 
@@ -88,17 +89,20 @@ case "${1:-}" in
   #       不需要后台常驻进程，也不用 chmod +x（用 bash 显式调用即可）。
   #       自带互斥锁：上一轮没跑完就直接退出，避免堆积。
   once)
-    if [ -d "$DIR/.once.lock" ]; then
-      # 锁超过 10 分钟还在 = 上次异常退出的残留，自动清理；否则说明上一轮没跑完，直接退出
-      if [ -n "$(find "$DIR/.once.lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
-        rmdir "$DIR/.once.lock" 2>/dev/null
-      else
-        exit 0
+    # 注意：这里不能用 exec —— exec 会替换掉 shell 进程，EXIT trap 不会执行，锁就永远删不掉了
+    if [ -d "$LOCK" ]; then
+      old="$(cat "$LOCK/pid" 2>/dev/null)"
+      if [ -n "${old:-}" ] && kill -0 "$old" 2>/dev/null; then
+        exit 0                       # 上一轮真的还在跑，这次跳过
       fi
+      rm -rf "$LOCK" 2>/dev/null     # 进程已死的残留锁，立刻清掉
     fi
-    mkdir "$DIR/.once.lock" 2>/dev/null || exit 0
-    trap 'rmdir "$DIR/.once.lock" 2>/dev/null' EXIT
-    exec "$PY" "$DIR/watch_sync.py" --once ;;
+    mkdir "$LOCK" 2>/dev/null || exit 0
+    echo $$ > "$LOCK/pid" 2>/dev/null
+    "$PY" "$DIR/watch_sync.py" --once
+    rc=$?
+    rm -rf "$LOCK" 2>/dev/null
+    exit $rc ;;
   *)
     echo "用法: $0 {start|stop|restart|status|log|once}"
     exit 1

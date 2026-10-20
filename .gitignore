@@ -2,8 +2,11 @@
 config.json
 token.json
 synced.json
+watch_state.json
 sync.log
 cron.log
+watch.log
+watch.pid
 .pkce_state.json
 
 # Python

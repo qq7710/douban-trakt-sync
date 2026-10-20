@@ -17,5 +17,11 @@
     "state_file": "synced.json",
     "max_attempts": 3,
     "retry_after_hours": 48
+  },
+  "watch": {
+    "interval": 30,
+    "probe_count": 5,
+    "full_sync_minutes": 30,
+    "state_file": "watch_state.json"
   }
 }

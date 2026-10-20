@@ -18,6 +18,7 @@
 **做：**
 
 - 定时把豆瓣新增的「想看」同步到 Trakt 待看
+- **准实时模式**：守护进程每 30 秒探一次，新增想看后最多半分钟就同步过去
 - 自动匹配条目（优先 IMDb 号，拿不到时用豆瓣原名去 Trakt 搜，含译名与别名）
 - 幂等：同一个条目只会推一次，重复运行不会重复添加
 
@@ -83,6 +84,12 @@ cp config.example.json config.json
     "state_file": "synced.json",
     "max_attempts": 3,
     "retry_after_hours": 48
+  },
+  "watch": {
+    "interval": 30,
+    "probe_count": 5,
+    "full_sync_minutes": 30,
+    "state_file": "watch_state.json"
   }
 }
 ```
@@ -134,7 +141,51 @@ crontab -l
 
 改频率：把 `*/10` 改成 `*/30`（30 分钟）或 `*/5`（5 分钟）。
 
-### 方式 2：NAS 自带的「任务计划」类应用
+### 方式 2：准实时守护进程（推荐，新增后 ~30 秒内同步）
+
+cron 是"到点就全量跑一遍"，有点笨。想要"一加想看就马上同步"，用守护进程：
+
+```bash
+chmod +x watch_sync.sh
+./watch_sync.sh start      # 后台常驻
+./watch_sync.sh status     # 看是否在跑
+./watch_sync.sh log        # 实时看日志（Ctrl+C 退出，不会杀进程）
+./watch_sync.sh stop       # 停止
+```
+
+它做的事：
+
+- 启动时先跑一次全量，把停机期间漏掉的补上，并给"已知条目"打底
+- 之后**每 30 秒只拉最新 5 条想看（1 次请求）**，一旦发现没见过的条目 id → 立刻触发完整同步
+- 连续 30 分钟没动静，也会跑一次兜底全量（顺便重试冷却结束的失败条目）
+- 探测失败会自动退避（30→60→…→最多 600 秒），不会把豆瓣惹毛
+
+静默期开销约 **2880 次请求/天**，每次只有几十字节，比"每 10 分钟全量跑一次"还省。
+
+> **关于"能不能真的监听"**：不能。豆瓣开放 API 多年前已关闭，也没有「想看变更」的
+> Webhook，做不到真正的事件推送。上面这种"极轻量轮询 + 事件触发"是能达到的最接近方案。
+
+让它开机自启 + 挂了自动拉起（cron 当看门狗）：
+
+```bash
+crontab -e
+@reboot /bin/bash /你的目录/watch_sync.sh start >> /你的目录/watch.log 2>&1
+*/5 * * * * /bin/bash /你的目录/watch_sync.sh ensure >> /你的目录/watch.log 2>&1
+```
+
+`ensure` 是幂等的：已在跑就静默退出，没在跑才拉起来。
+
+有 systemd 的机器也可以用自带的 unit：
+
+```bash
+sudo cp douban-trakt-watch.service /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/douban-trakt-watch.service   # 改里面的路径
+sudo systemctl daemon-reload && sudo systemctl enable --now douban-trakt-watch
+```
+
+> 换成守护进程后，原来 `*/10` 那条全量 cron **可以删掉**（或留着做双保险，重复运行无害）。
+
+### 方式 3：NAS 自带的「任务计划」类应用
 
 飞牛 fnOS 可在**应用中心**安装「任务计划」；群晖在**控制面板 → 任务计划**。
 
@@ -149,7 +200,7 @@ crontab -l
 > ⚠️ 常见坑：Cron 填成 `*/10 0 * * *` 表示"只在凌晨 0 点这一小时里每 10 分钟"，
 > 结果一天只跑几次。正确写法是 `*/10 * * * *`。
 
-### 方式 3：Docker
+### 方式 4：Docker
 
 ```bash
 touch synced.json          # 必须先创建，否则 Docker 会把它建成目录
@@ -176,6 +227,10 @@ docker compose up -d --build
 | `sync.state_file` | `synced.json` | 已同步清单 |
 | `sync.max_attempts` | `3` | 匹配失败几次后转入冷却 |
 | `sync.retry_after_hours` | `48` | 冷却时长（小时） |
+| `watch.interval` | `30` | 守护进程轮询间隔（秒）。怕风控就改 60 |
+| `watch.probe_count` | `5` | 每轮拉最新几条来判断有没有新增 |
+| `watch.full_sync_minutes` | `30` | 静默多久后跑一次兜底全量 |
+| `watch.state_file` | `watch_state.json` | 守护进程状态（已知条目 id） |
 
 ---
 
@@ -220,8 +275,20 @@ python3 wishlist_sync.py --config config.json --dry-run
 **看不到日志？**
 ```bash
 tail -f /你的目录/sync.log      # 同步日志
+tail -f /你的目录/watch.log     # 守护进程的 console 输出
 tail -f /你的目录/cron.log      # cron 的输出与报错
 ```
+
+**想手动触发一次？**
+```bash
+python3 wishlist_sync.py --config config.json          # 全量同步一次
+./watch_sync.sh once                                    # 只探测一次，有新增才同步
+```
+
+**会不会把豆瓣/Trakt 访问太频繁？**
+全量同步一次约 1（列表）+ N（匹配）次请求；守护进程静默期每轮只有 **1 次**极小的探测请求。
+默认 30 秒一轮 ≈ 2880 次/天，全是 `m.douban.com` 的同一个接口，量级很低。
+真被风控了脚本会自动退避，加大 `watch.interval` 到 60 即可。
 
 ---
 
@@ -233,6 +300,9 @@ tail -f /你的目录/cron.log      # cron 的输出与报错
 | `auth_trakt.py` | Trakt 一次性授权（生成 token.json） |
 | `nas_setup.sh` | 一键部署（装依赖 + 写 crontab + 试跑） |
 | `run_sync.sh` | 定时任务调用的包装脚本 |
+| `watch_sync.py` | 准实时守护进程（轻量轮询 + 事件触发） |
+| `watch_sync.sh` | 守护进程启停脚本（start/stop/restart/status/log/once/ensure） |
+| `douban-trakt-watch.service` | systemd unit（可选） |
 | `config.example.json` | 配置模板 |
 | `requirements.txt` | 依赖：requests + certifi |
 | `Dockerfile` / `docker-compose.yml` | Docker 部署（可选） |

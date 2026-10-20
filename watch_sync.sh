@@ -84,7 +84,21 @@ case "${1:-}" in
   status)
     if is_running; then echo "运行中 (pid $(cat "$PIDFILE"))"; else echo "未运行"; fi ;;
   log)     tail -f "$LOG" ;;
-  once)    exec "$PY" "$DIR/watch_sync.py" --once ;;
+  # once: 只跑一轮（探测一次，有新增才同步）。给「任务计划/minute cron」用最简单，
+  #       不需要后台常驻进程，也不用 chmod +x（用 bash 显式调用即可）。
+  #       自带互斥锁：上一轮没跑完就直接退出，避免堆积。
+  once)
+    if [ -d "$DIR/.once.lock" ]; then
+      # 锁超过 10 分钟还在 = 上次异常退出的残留，自动清理；否则说明上一轮没跑完，直接退出
+      if [ -n "$(find "$DIR/.once.lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+        rmdir "$DIR/.once.lock" 2>/dev/null
+      else
+        exit 0
+      fi
+    fi
+    mkdir "$DIR/.once.lock" 2>/dev/null || exit 0
+    trap 'rmdir "$DIR/.once.lock" 2>/dev/null' EXIT
+    exec "$PY" "$DIR/watch_sync.py" --once ;;
   *)
     echo "用法: $0 {start|stop|restart|status|log|once}"
     exit 1

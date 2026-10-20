@@ -5,7 +5,7 @@
   },
   "trakt": {
     "client_id": "在 https://trakt.tv/oauth/applications 新建应用后获取",
-    "client_secret": "同上",
+    "client_secret": "留空即可（PKCE 流程不需要 client_secret）",
     "token_file": "token.json"
   },
   "sync": {

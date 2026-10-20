@@ -6,12 +6,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 # 改成你实际的项目目录和 python 路径
-WorkingDirectory=/vol1/1000/定时任务/douban-trakt-sync
-ExecStart=/vol1/1000/定时任务/douban-trakt-sync/.venv/bin/python /vol1/1000/定时任务/douban-trakt-sync/watch_sync.py
+WorkingDirectory=/opt/douban-trakt-sync
+ExecStart=/opt/douban-trakt-sync/.venv/bin/python /opt/douban-trakt-sync/sync.py watch
 Restart=always
 RestartSec=10
-StandardOutput=append:/vol1/1000/定时任务/douban-trakt-sync/watch.log
-StandardError=append:/vol1/1000/定时任务/douban-trakt-sync/watch.log
+StandardOutput=append:/opt/douban-trakt-sync/watch.log
+StandardError=append:/opt/douban-trakt-sync/watch.log
 
 [Install]
 WantedBy=multi-user.target

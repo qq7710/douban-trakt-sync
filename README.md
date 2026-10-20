@@ -119,11 +119,13 @@ cd /你的/项目目录 && bash nas_setup.sh
 
 ```bash
 # 方式 A：本地回调（在能开浏览器的机器上用，最简单）
-python3 auth_trakt.py --config config.json
+python3 sync.py auth
 
 # 方式 B：粘贴模式（SSH 到 NAS 等无浏览器环境时用）
-python3 auth_trakt.py --config config.json --mode paste
+python3 sync.py auth --mode paste
 ```
+
+> 老版等价命令是 `python3 auth_trakt.py --config config.json`，效果一样。
 
 **方式 A**：脚本会打印一个链接 → 浏览器打开 → 登录 Trakt → 点 **Allow** → 自动完成，
 页面显示"授权成功"即可关闭。
@@ -189,18 +191,15 @@ python sync.py selftest          # 离线自检
 | 执行用户 | root |
 | 触发方式 | 定时 |
 | Cron | `* * * * *`（每分钟一次，5 个字段） |
-| 脚本内容 | `bash /你的目录/watch_sync.sh once` |
+| 脚本内容 | `/你的目录/.venv/bin/python /你的目录/sync.py once` |
 
-用单文件版的话，「脚本内容」填这个（把 `/你的目录` 换成实际路径）：
-
-```
-/你的目录/.venv/bin/python /你的目录/sync.py once
-```
-
-（没建虚拟环境、requests 装在系统 python 里的话就写 `python3 /你的目录/sync.py once`）
+（`/你的目录` 换成实际路径；没建虚拟环境、requests 装在系统 python 里的话写
+`python3 /你的目录/sync.py once`）
 
 `once` = 「探测一次，有新增才同步」。静默期每轮只有 1 次请求，
 新增想看后 **1 分钟内**同步。自带互斥锁，上一轮没跑完不会堆积。
+
+> 老版写法是 `bash /你的目录/watch_sync.sh once`，效果一样。
 
 > ⚠️ 常见坑：Cron 填成 `*/10 0 * * *` 表示"只在凌晨 0 点这一小时里每 10 分钟"，
 > 结果一天只跑几次。要每分钟就是 `* * * * *`。
@@ -208,10 +207,10 @@ python sync.py selftest          # 离线自检
 命令行环境下等价的写法：
 
 ```bash
-* * * * * /bin/bash /你的目录/watch_sync.sh once >> /你的目录/watch.log 2>&1
+* * * * * /你的目录/.venv/bin/python /你的目录/sync.py once >> /你的目录/sync.log 2>&1
 ```
 
-> 想更快（30 秒内）就用方式 2 的守护进程，代价是需要在终端里执行 `./watch_sync.sh start`。
+> 想更快（30 秒内）就用方式 2 的守护进程（`python sync.py watch --daemon`）。
 
 ### 方式 2：守护进程常驻（新增后 ~30 秒内同步）
 
@@ -293,6 +292,7 @@ docker compose up -d --build
 | `sync.state_file` | `synced.json` | 已同步清单 |
 | `sync.max_attempts` | `3` | 匹配失败几次后转入冷却 |
 | `sync.retry_after_hours` | `48` | 冷却时长（小时） |
+| `sync.network_retries` | `1` | 网络瞬断时额外重试几次（间隔 3 秒、6 秒…） |
 | `watch.interval` | `30` | 守护进程轮询间隔（秒）。怕风控就改 60 |
 | `watch.probe_count` | `5` | 每轮拉最新几条来判断有没有新增 |
 | `watch.full_sync_minutes` | `30` | 静默多久后跑一次兜底全量 |
@@ -302,15 +302,17 @@ docker compose up -d --build
 
 ## 工作原理（想了解再看）
 
-1. **探测**（`watch_sync.py`）：每 N 秒拉一次豆瓣最新 5 条想看（1 次请求），
+1. **探测**（`sync.py once` / `sync.py watch`）：每 N 秒拉一次豆瓣最新 5 条想看（1 次请求），
    比对 `watch_state.json` 里记过的 id，没见过的才触发下面的完整同步
-3. **抓取**：豆瓣移动端 `interests` 接口，带 `status=mark` 只取「想看」（1 次请求）
-4. **匹配**：优先取豆瓣条目的 IMDb 号；取不到时用豆瓣原名/中文标题在 Trakt 搜索
+2. **抓取**：豆瓣移动端 `interests` 接口，带 `status=mark` 只取「想看」（1 次请求）
+3. **匹配**：优先取豆瓣条目的 IMDb 号；取不到时用豆瓣原名/中文标题在 Trakt 搜索
    （带 `fields=title,translations,aliases`，中文译名和别名也能命中）
-5. **去重**：查本地 `synced.json`，已推过的直接跳过
-6. **提交**：`POST /sync/watchlist`，幂等
-7. **记录**：只有提交成功才写入清单，失败的下轮会重试；
+4. **去重**：查本地 `synced.json`，已推过的直接跳过
+5. **提交**：`POST /sync/watchlist`，幂等
+6. **记录**：只有提交成功才写入清单，失败的下轮会重试；
    匹配失败 3 次后进入 48 小时冷却，不会每轮白跑
+
+> 网络瞬断（`Network is unreachable` 之类）会在这一步自动重试，见 FAQ。
 
 **关于"看完会不会被塞回待看"**：Trakt 的待看列表在你看完第 1 集/电影后会自动移除该条目。
 如果没有本地清单，工具下一轮会发现"豆瓣想看里有、Trakt 待看里没有"，于是又推一遍 —— 无限循环。
@@ -324,7 +326,7 @@ docker compose up -d --build
 豆瓣列表可能被设为私密或被反爬拦截 → 在 `config.json` 的 `douban.cookie` 填入浏览器 Cookie。
 
 **提交报 401？**
-token 失效。重新跑一次 `auth_trakt.py`。
+token 失效。重新跑一次 `python3 sync.py auth`。
 
 **某部片匹配不上？**
 多为 Trakt 上根本没有该条目（尤其是没有 IMDb 号的小众国产片）。
@@ -332,13 +334,13 @@ token 失效。重新跑一次 `auth_trakt.py`。
 
 **想让它全部重推一次？**
 ```bash
-python3 wishlist_sync.py --config config.json --force
+python3 sync.py run --force
 ```
 （或删掉 `synced.json`。**注意：这会把你看完的条目也重新推回待看**）
 
 **只想预览不提交？**
 ```bash
-python3 wishlist_sync.py --config config.json --dry-run
+python3 sync.py run --dry-run
 ```
 
 **看不到日志？**
@@ -349,8 +351,8 @@ tail -f /你的目录/watch.log     # 探测/守护进程的 console 输出与�
 
 **想手动触发一次？**
 ```bash
-python3 wishlist_sync.py --config config.json          # 全量同步一次
-./watch_sync.sh once                                    # 只探测一次，有新增才同步
+python3 sync.py run       # 全量同步一次
+python3 sync.py once      # 只探测一次，有新增才同步
 ```
 
 **会不会把豆瓣/Trakt 访问太频繁？**
@@ -371,6 +373,17 @@ VIP 才不限。官方应用和网页版不占名额。注意事项：
 **没有「新增想看」的日志，是不是坏了？**
 不是。静默期每次只打一行 `探测一次，豆瓣用户 xxx`，没有 `🆕` 就说明豆瓣侧确实没新增。
 想验证就去豆瓣随手加一条想看，一分钟内应该出现 `🆕 发现新增想看`。
+
+**日志里出现 `Network is unreachable` / `请求失败 ... Max retries exceeded`？**
+
+这是**网络层**的报错，跟脚本和豆瓣都没关系 —— 那一刻这台机器本身连不上外网。常见原因：
+
+- NAS 刚好在重启 / 断网 / 从休眠唤醒（网卡还没起来）
+- 有 IPv6 地址但上游没有 IPv6 路由 → 解析到 IPv6 后直接 `Errno 101`
+- 任务计划在开机瞬间就触发，此时网络还没就绪
+
+`sync.py` 遇到这种情况会自动重试（默认再试 1 次，间隔 3 秒），仍失败就等下一轮，
+**不会漏条目**。偶发几行不用管；如果一直刷同样的报错，再去查这台机器的网络。
 
 ---
 

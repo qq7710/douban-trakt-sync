@@ -275,6 +275,25 @@ def _rexxar_get(s, url, params, referer):
         return None
 
 
+NET_RETRIES = 1   # 网络抖动时的额外重试次数（config 的 sync.network_retries 可改）
+NET_ERR_HINT = ("连不上豆瓣。常见原因：这一刻机器本身没外网（断网 / 刚从休眠唤醒 / "
+                "有 IPv6 地址但没有 IPv6 路由），不是脚本或豆瓣的问题，下一轮会自动重试。"
+                "若一直这样，请检查这台机器的网络。")
+
+
+def _rexxar_get_retry(s, url, params, referer):
+    """带重试的 _rexxar_get：NAS 休眠唤醒、网络瞬断这类抖动能自己恢复。"""
+    js = _rexxar_get(s, url, params, referer)
+    for i in range(NET_RETRIES):
+        if js is not None:
+            return js
+        wait = 3 * (i + 1)
+        log.warning("网络异常，%d 秒后重试（第 %d/%d 次）", wait, i + 1, NET_RETRIES)
+        time.sleep(wait)
+        js = _rexxar_get(s, url, params, referer)
+    return js
+
+
 INTERESTS_API = "https://m.douban.com/rexxar/api/v2/user/%s/interests"
 
 
@@ -289,9 +308,9 @@ def get_wishlist(s, user_id):
     start = 0
     page = 50  # 该接口单页最多返回 50 条
     while True:
-        js = _rexxar_get(s, INTERESTS_API % user_id,
-                         {"start": start, "count": page, "status": "mark"},
-                         "https://m.douban.com/mine/movie")
+        js = _rexxar_get_retry(s, INTERESTS_API % user_id,
+                               {"start": start, "count": page, "status": "mark"},
+                               "https://m.douban.com/mine/movie")
         if not js:
             break
         arr = js.get("interests") or []
@@ -704,9 +723,10 @@ def save_watch_state(path, st):
 
 def probe(s, user_id, n):
     """只拉最新 n 条想看，返回 [(id, title, create_time)]；接口异常返回 None。"""
-    js = _rexxar_get(s, INTERESTS_API % user_id, {"start": 0, "count": n, "status": "mark"},
-                     "https://m.douban.com/mine/movie")
+    js = _rexxar_get_retry(s, INTERESTS_API % user_id, {"start": 0, "count": n, "status": "mark"},
+                           "https://m.douban.com/mine/movie")
     if js is None:
+        log.error(NET_ERR_HINT)
         return None
     out = []
     for it in js.get("interests") or []:
@@ -1157,6 +1177,12 @@ def main():
 
     setup_logging(config.get("sync", {}).get("log_file"))
     dry = args.dry_run or bool(config.get("sync", {}).get("dry_run"))
+
+    global NET_RETRIES
+    try:
+        NET_RETRIES = max(0, int(config.get("sync", {}).get("network_retries", 1)))
+    except Exception:
+        NET_RETRIES = 1
 
     if args.command == "run":
         return run(config, dry, force=args.force)

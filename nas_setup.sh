@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# 飞牛OS(fnOS) / Debian 一键部署：豆瓣「想看」 → Trakt「待看」 每 10 分钟自动同步
+# 飞牛OS(fnOS) / Debian 一键部署：豆瓣「想看」 → Trakt「待看」 准实时同步
 # 用法：把本脚本放进项目目录，SSH 登录 NAS 后执行：
-#   cd /vol1/@appshare/Gocron/douban-trakt-sync && bash nas_setup.sh
+#   cd /你的目录/douban-trakt-sync && bash nas_setup.sh
 # 幂等：重复执行不会重复写 crontab，也不会重复装依赖。
+#
+# 部署的是「探测模式」：每分钟跑一次 watch_sync.sh once
+#   静默期只有 1 次极小请求，发现新增想看才触发完整同步（1 分钟内生效）。
 
 set -e
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -45,17 +48,21 @@ else
 fi
 
 # ---------- 3. 权限 ----------
-chmod +x "$DIR/run_sync.sh"
+chmod +x "$DIR/run_sync.sh" "$DIR/watch_sync.sh" 2>/dev/null || true
 chmod 600 "$DIR/config.json" "$DIR/token.json" 2>/dev/null || true
 echo "[3/5] 权限已设置（config.json / token.json 设为 600）"
 
 # ---------- 4. 写 crontab（幂等） ----------
-CRON_LINE="*/10 * * * * /bin/bash $DIR/run_sync.sh >> $DIR/cron.log 2>&1"
-MARKER="douban-trakt-sync/run_sync.sh"
+# 探测模式：每分钟跑一次 watch_sync.sh once（静默期 1 次请求，有新增才完整同步）
+CRON_LINE="* * * * * /bin/bash $DIR/watch_sync.sh once >> $DIR/watch.log 2>&1"
+MARKER="$DIR/watch_sync.sh"
+# 旧版本留下的「每 10 分钟全量」任务，一并清掉
+OLD_MARKER="$DIR/run_sync.sh"
 
-if crontab -l 2>/dev/null | grep -Fq "$MARKER"; then
+CUR="$(crontab -l 2>/dev/null || true)"
+if echo "$CUR" | grep -Fq "$MARKER" || echo "$CUR" | grep -Fq "$OLD_MARKER"; then
   echo "[4/5] 发现旧的定时任务，先移除"
-  crontab -l 2>/dev/null | grep -Fv "$MARKER" | crontab - || true
+  echo "$CUR" | grep -Fv "$MARKER" | grep -Fv "$OLD_MARKER" | crontab - || true
 fi
 ( crontab -l 2>/dev/null; echo "$CRON_LINE" ) | crontab -
 echo "      已写入："
@@ -64,7 +71,7 @@ echo "      $CRON_LINE"
 # ---------- 5. 试跑一次 ----------
 echo ""
 echo "[5/5] 试跑一次（约 10~30 秒）..."
-bash "$DIR/run_sync.sh" || echo "      ⚠️ 试跑返回非 0，请看下面日志"
+bash "$DIR/watch_sync.sh" once || echo "      ⚠️ 试跑返回非 0，请看下面日志"
 
 echo ""
 echo "=============================================="
@@ -76,8 +83,10 @@ echo ""
 echo "=============================================="
 echo " 部署完成"
 echo "=============================================="
-echo " · 每 10 分钟自动同步一次"
+echo " · 每分钟探测一次，新增想看后 1 分钟内同步"
 echo " · 查看同步日志: tail -f $DIR/sync.log"
-echo " · 查看 cron 输出: tail -f $DIR/cron.log"
+echo " · 查看探测日志: tail -f $DIR/watch.log"
+echo " · 想改成 30 秒级：改 config.json 的 watch.interval，然后停掉本 cron 改用"
+echo "   $DIR/watch_sync.sh start（守护进程常驻）"
 echo " · 查看定时任务: crontab -l"
 echo ""

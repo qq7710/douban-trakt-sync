@@ -1,0 +1,13 @@
+# 个人凭据与运行时数据，切勿提交/分享
+config.json
+token.json
+synced.json
+sync.log
+cron.log
+.pkce_state.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

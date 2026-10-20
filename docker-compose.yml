@@ -1,0 +1,12 @@
+services:
+  douban-trakt-sync:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./token.json:/app/token.json:ro
+      # 已同步清单必须持久化，否则容器重启后会把看过的重新推一遍
+      # 首次启动前请先执行：touch synced.json （否则 Docker 会把它建成目录）
+      - ./synced.json:/app/synced.json
+    # 频率在 Dockerfile 的 CMD 里（sleep 600 = 10 分钟）。
+    # 想更即时就改小（如 300 = 5 分钟），但注意豆瓣风控。

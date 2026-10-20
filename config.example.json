@@ -1,0 +1,21 @@
+{
+  "douban": {
+    "user_id": "请填你的豆瓣数字 ID（个人主页 URL 里 people/ 后面的数字）",
+    "cookie": ""
+  },
+  "trakt": {
+    "client_id": "在 https://trakt.tv/oauth/applications 新建应用后获取",
+    "client_secret": "同上",
+    "token_file": "token.json"
+  },
+  "sync": {
+    "request_interval": 0.8,
+    "dry_run": false,
+    "log_file": "sync.log",
+    "fuzzy_match": true,
+    "cross_type_fallback": false,
+    "state_file": "synced.json",
+    "max_attempts": 3,
+    "retry_after_hours": 48
+  }
+}

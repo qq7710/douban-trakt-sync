@@ -1,0 +1,6 @@
+# 统一使用 LF 换行。
+# 关键：Shell 脚本若被转成 CRLF，在 Linux/NAS 上会报 "/bin/bash^M: bad interpreter" 而跑不起来。
+* text=auto eol=lf
+
+# 脚本必须 LF
+*.sh text eol=lf
